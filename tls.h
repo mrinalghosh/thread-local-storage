@@ -3,16 +3,18 @@
 
 #include <pthread.h>
 
-typedef struct Page {
+#define MAX_THREADS 128
+
+typedef struct page_frame {
     uintptr_t address;
-    unsigned ref_count;  //TODO: signed or unsigned - can this be negative?
-} Page;
+    unsigned ref_count;  //TODO: signed or unsigned
+} page_frame;
 
 typedef struct TLS {
     pthread_t tid;
-    unsigned size;
-    unsigned num_pages;
-    Page **pages;
+    unsigned int size;       // in bytes
+    unsigned int num_pages;  // number of pages
+    struct page_frame **pages;
 } TLS;
 
 int tls_create(unsigned int size);
