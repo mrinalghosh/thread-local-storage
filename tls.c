@@ -32,48 +32,88 @@ void  <signal_handler>(int signal, siginfo_t *info, void *context);
     context - thread context info
 */
 
-const int page_size = getpagesize();
 bool initialized = false;
-int i;                               // for iteration
-struct TLS *tls_array[MAX_THREADS];  // can we still assume maxthreads in this assignment?
+int page_size;
+int i, cnt;  // for iteration
 
-static void tls_handle_page_fault(int signal, siginfo_t *info, void *context) {
-    printf("Inside signal handler");
-    uintptr_t page_fault = (uintptr_t)(info->si_addr) & ~(page_size - 1);  // find page address (aligned) of page fault - page_size always power of 2
+struct TLS *tls_table[MAX_THREADS];
 
-    // pthread_exit wrapper or pthread_exit once done?
-}
+/* HELPER FUNCTIONS GIVEN */
 
 static void tls_init(void) {
-    /* SIGNAL HANDLING */
-    struct sigaction act;
-    // memset(&act, 0, sizeof(act)); // don't really need to zero entire struct
-    sigemptyset(&act.sa_mask);
-    act.sa_flags = SA_SIGINFO;  // for verbose signal handling (int signal, siginfo_t *info, void *context)
-    act.sa_handler = tls_handle_page_fault;
-    sigaction(SIGSEGV, &act, NULL);
-    sigaction(SIGBUS, &act, NULL);  // on some machines SIGBUS traps memory - Camden OH
+    /* get the size of a page */
+    page_size = getpagesize();
+    /* install the signal handler for page faults (SIGSEGV, SIGBUS) */
+    struct sigaction sigact;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = SA_SIGINFO; /* use extended signal handling */
+    sigact.sa_sigaction = tls_handle_page_fault;
+    sigaction(SIGBUS, &sigact, NULL);
+    sigaction(SIGSEGV, &sigact, NULL);
 
     for (i = 0; i < MAX_THREADS; ++i) {
-        // tls_array[i]->id = -1; // do I even need to set this?
-        tls_array[i]->id = (pthread_t)i;
-        // tls_array[i]->size = 0; // are these even necessary?
-        // tls_array[i]->num_pages = 0;
-        // tls_array[i]->pages = NULL;
+        tls_table[i] = NULL;  // will calloc each TLS when it is first created
     }
 
     initialized = true;
 }
+
+static void tls_protect(struct page *p) {
+    if (mprotect((void *)p->address, page_size, 0)) {
+        fprintf(stderr, "tls_protect: could not protect page\n");
+        exit(1);
+    }
+}
+
+static void tls_unprotect(struct page *p) {
+    if (mprotect((void *)p->address, page_size,
+                 PROT_READ | PROT_WRITE)) {
+        fprintf(stderr, "tls_unprotect: could not unprotect page\n");
+        exit(1);
+    }
+}
+
+static void tls_handle_page_fault(int sig, siginfo_t *si, void *context) {
+    unsigned int p_fault = ((unsigned int)si->si_addr) & ~(page_size - 1);
+}
+
+// static void insert_pages(TLS *tls, int n) {
+//     struct page *temp = calloc(1, sizeof(page));  // allocate first page
+//     tls->pages = temp;                            // store this head of LL in tls
+//     for (i = 0; i < n; ++i) {
+//         // TODO: is this prot_none or 0?
+//         temp->address = (unsigned int)mmap(NULL, page_size, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);  // store address of page
+//         temp->ref_count = 1;
+//         temp->next = calloc(1, sizeof(page));
+//         temp = temp->next;  // should be null;
+//     }
+// }
 
 int tls_create(unsigned int size) {
     /* TODO:
     create LSA for current thread
     return 0 - success | -1 - thread already has LSA w size > 0 bytes
     */
+
     if (!initialized) {
-        // init TLS management struct
         tls_init();
     }
+
+    unsigned int id = (unsigned int)pthread_self();  //current id
+
+    if (tls_table[id] && tls_table[id]->size > 0) {  // current thread already has an LSA (ie TLS not NULL) and size is > 0
+        return -1;
+    }
+
+    tls_table[id] = calloc(1, sizeof(TLS));  // allocate TLS member
+    tls_table[id]->tid = pthread_self();
+    tls_table[id]->size = size;
+    tls_table[id]->page_num = 1 + (size - 1) / page_size;  // 4096 -> 1 page
+
+    tls_table[id]->pages = calloc(1, sizeof(page*))
+    // void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
+
+    return 0;
 }
 
 int tls_write(unsigned int offset, unsigned int length, char *buffer) {
