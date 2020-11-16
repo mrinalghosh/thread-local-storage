@@ -1,16 +1,19 @@
 #ifndef TLS_H
 #define TLS_H
 
-#include <inttypes.h>
+#include <inttypes.h>  // uintptr_t
 #include <pthread.h>
 
 #define HASH_SIZE 32
-#define MAX_THREADS 128
+#define error(message)      \
+    {                       \
+        perror(message);    \
+        exit(EXIT_FAILURE); \
+    }
 
 typedef struct page {
-    // unsigned int address; /* start address of page */
-    uintptr_t address;
-    int ref_count; /* counter for shared pages */
+    uintptr_t address; /* uintptr_t supports bitwise ops and is portable */
+    int ref_count;     /* counter for shared pages */
 } page;
 
 typedef struct TLS {
@@ -20,11 +23,11 @@ typedef struct TLS {
     page **pages;          /* array of pointers to pages */
 } TLS;
 
-typedef struct hash_node {
+typedef struct hash_element {
     pthread_t tid;
     TLS *tls;
-    struct hash_node *next;
-} hash_node;
+    struct hash_element *next;
+} hash_element;
 
 int tls_create(unsigned int size);
 int tls_write(unsigned int offset, unsigned int length, char *buffer);

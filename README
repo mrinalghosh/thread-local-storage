@@ -1,0 +1,65 @@
+Project 4: Thread Local Storage
+EC440 - Introduction to Operating Systems
+Mrinal Ghosh (U33402990)
+
+[ Description ]
+This project dealt with the creation and management of thread local storage (TLS) for individual threads. These local storage areas (LSAs) are protected memory regions between other threads within the same process. This safeguards memory accesses and protects threads from accidentally modifying data that does not belong to them. 
+
+The supported operations in my user-space library implementation are tls_create(), tls_read(), tls_write(), tls_destroy() and tls_clone() - as described by the specification. 
+
+Overview:
+My TLS structure (unique per thread) contains the thread id, an array of pointers to allocated pages, and meta-information about the total allocation. 
+
+Each page consists of an address to the beginning of the block and the number of references to that page (for copy-on-write).
+
+In order to keep track of the threads with large variance in tids, I implemented an open hash table; in order to map each tid (key) to a unique index (value) in the hash table, a modulo hash function is used. Within this indexed entry in the hash table, a singly linked list (LL) is managed. Each element in the LL has the tid, a pointer to the thread's TLS and a pointer to the next element.
+
+The first call (to tls_create) initializes the hash table structure and gets page size (usually 4096b). It also sets up the signal handlers for SIGSEGV (invalid memory access) and SIGBUS (access to invalid address), as well as chooses to send a more verbose signal (including the address of fault) to our custom signal handler.
+
+tls_create verifies that the size is non-zero and the calling thread does not have an LSA, else returns -1. If valid, a new TLS is allocated with all the requested pages allocated to with mmap() and stored. The hash_insert function encapsulates all of these structures this and stores it in the hash table for retrieval later.
+
+tls_write verifies that the calling thread has an LSA and that the offset+length will not surpass the available local storage size. It fetches the TLS of the current thread and unprotects its page array. It then iterates character by character and writes each character from the (char *) buffer passed in as an input, to the appropriate page. In order to deal with CoW (copy-on-write) semantics, if a page has more than one reference (i.e. multiple threads point to that page), a copy is made and edited, and replaces the 'read only' shared copy. Finally the pages that have been written are then reprotected. I was considering using semaphores in order to make the tls_write operation atomic, however in all the examples I saw, the user generally sets protection semaphores up.
+
+tls_read also verfies the calling thread's LSA and sizing. It then unprotects the pages of the current thread, and reads its pages / writes them onto the buffer in a similar fashion to tls_write. However there is no necessary accomodation for CoW. The pages of the current thread are then reprotected.
+
+tls_destroy simply frees the LSA of the currently executing thread (after checking if it indeed has an LSA). In the hash map, the hash element is removed from the linked list and the hierarchy of allocated memory is freed. The pages themselves are freed with munmap. The various structs allocated with calloc are also freed.
+
+tls_clone 'clones' the LSA of a target thread into the current thread (which does not currently have an LSA). This is done by allocating and populating a new tls and inserting it into the hash table. The pages of the clone point to the same pages as the target, but the CoW implementation in tls_write allow a relatively straightforward cloning process.
+
+tls_handle_page_fault (signal handler) is a function that is called asynchronously when a SIGSEGV or SIGBUS are recieved. It looks at the address of the segfault in order to ascertain which thread has caused this fault. This is done by a brute force search through the hash table's TLS pages and then calls pthread exit if there is a match (ie thread T[i] accessed thread T[j], i!=j). If this is not the case (and the segfault was caused by accessing another process's memory) then we reset the default signal handler (SIG_DFL) and reraise the signal - which will terminate the process with that signal.
+
+[ Sources ]
+
+Lectures, notes, man-pages, discussion with classmates
+
+Structs:
+https://stackoverflow.com/questions/6326338/why-when-to-use-intptr-t-for-type-casting-in-c
+https://stackoverflow.com/questions/29800256/when-is-uintptr-t-preferred-over-intptr-t
+https://stackoverflow.com/questions/13590812/c-freeing-structs
+
+TLS:
+https://www.cs.cmu.edu/~ab/15-123S09/lectures/Lecture%2011%20%20-%20%20Array%20of%20Linked%20Lists.pdf
+https://stackoverflow.com/questions/40941825/understanding-void-against-intptr-t-and-uintptr-t
+https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
+
+Hashing:
+https://kaushikbaruah.com/posts/data-structure-in-c-hashmap/
+
+mmap & mprotect:
+https://man7.org/linux/man-pages/man2/mmap.2.html
+https://stackoverflow.com/questions/2601121/mprotect-how-aligning-to-multiple-of-pagesize-works
+https://stackoverflow.com/questions/6979892/how-to-free-memory-allocated-using-mmap
+
+Signals:
+https://www.linuxquestions.org/questions/programming-9/catching-multiple-signals-in-a-single-handler-in-linux-c-877096/
+https://www.oracle.com/technical-resources/articles/it-infrastructure/dev-signal-handlers-studio.html
+https://stackoverflow.com/questions/3645172/how-to-reset-sigint-to-default-after-pointing-it-some-user-defined-handler-for-s
+
+[ Notes ]
+- Either use array of LL or 2D array (https://chao-tic.github.io/blog/2018/12/25/tls)
+- printf() is not "async-safe" in signal handler (oracle link above) - can use write() if printing needed in deployment
+- SIGBUS - access to invalid address    SIGSEGV - invalid access to valid memory
+- pthread_t is an unsigned long int in bits/pthreadtypes.h
+- thread numbers are not necessarily in a range we can map - hashing is the natural solution
+- exit(EXIT_FAILURE) is a portable version of exit(1)
+- used macro for all the perror(...); exit(...);
